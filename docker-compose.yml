@@ -1,0 +1,23 @@
+services:
+  telegram-monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: telegram-file-monitor
+    ports:
+      - "3000:3000"
+    volumes:
+      # SQLite database persistence
+      - db-data:/app/data/db
+      # Download directory - mount to host directory
+      - ./downloads:/app/data/downloads
+    environment:
+      - DATA_DIR=/app/data/db
+      - DB_PATH=/app/data/db/app.db
+      - FRONTEND_DIST=/app/frontend/dist
+      - PORT=3000
+    restart: unless-stopped
+
+volumes:
+  db-data:
+    driver: local

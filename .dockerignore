@@ -1,0 +1,28 @@
+# Dependencies - will be installed inside Docker
+server/node_modules/
+server/bun.lock
+frontend/node_modules/
+frontend/node_modules/.package-lock.json
+frontend/package-lock.json
+
+# Build artifacts (frontend built in Docker, local dist is irrelevant)
+frontend/dist/
+
+# Source maps (not needed in production)
+frontend/dist/assets/*.map
+
+# Data directory (DB + downloads - mounted as volumes at runtime)
+server/data/
+
+# Development files
+.git/
+.gitignore
+*.md
+dev.ps1
+docker-build.ps1
+.env.example
+.env
+
+# OS files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,27 @@
+# Dependencies
+**/node_modules/
+frontend/package-lock.json
+server/bun.lock
+
+# Build output
+frontend/dist/
+
+# Runtime data
+server/data/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+
+# Logs
+*.log

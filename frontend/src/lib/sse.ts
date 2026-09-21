@@ -9,31 +9,46 @@ const handlers = new Map<string, Set<SseHandler>>();
 let eventSource: EventSource | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
+// Dispatch an SSE frame to all registered handlers for its `type` field.
+// Works for both named events (event: task_progress) and unnamed ones.
+function handleEvent(event: MessageEvent) {
+  try {
+    const raw = JSON.parse(event.data as string) as Record<string, unknown>;
+    // Backend sends flat events: {"type":"bot_status","running":true}
+    // Frontend handlers expect nested: { type, data: { running: true } }.
+    // Normalize once here so page code can read msg.data.* everywhere.
+    const { type: _type, ...rest } = raw;
+    const data: SseMessage = { type: String(_type), data: rest };
+    const typeHandlers = handlers.get(data.type);
+    if (typeHandlers) {
+      for (const handler of typeHandlers) {
+        handler(data);
+      }
+    }
+    // Also notify wildcard listeners
+    const wildcardHandlers = handlers.get('*');
+    if (wildcardHandlers) {
+      for (const handler of wildcardHandlers) {
+        handler(data);
+      }
+    }
+  } catch {
+    // Ignore parse errors
+  }
+}
+
 function connect(): void {
   if (eventSource) return;
 
   eventSource = new EventSource('/api/events');
 
-  eventSource.onmessage = (event) => {
-    try {
-      const data = JSON.parse(event.data) as SseMessage;
-      const typeHandlers = handlers.get(data.type);
-      if (typeHandlers) {
-        for (const handler of typeHandlers) {
-          handler(data);
-        }
-      }
-      // Also notify wildcard listeners
-      const wildcardHandlers = handlers.get('*');
-      if (wildcardHandlers) {
-        for (const handler of wildcardHandlers) {
-          handler(data);
-        }
-      }
-    } catch {
-      // Ignore parse errors
-    }
-  };
+  // Frames without an `event:` field arrive via onmessage...
+  eventSource.onmessage = handleEvent;
+  // ...while named events (task_progress, task_done, ...) need explicit
+  // addEventListener for each subscribed type.
+  for (const type of handlers.keys()) {
+    eventSource.addEventListener(type, handleEvent);
+  }
 
   eventSource.onerror = () => {
     disconnect();
@@ -54,6 +69,7 @@ function disconnect(): void {
 }
 
 export function onSse(type: string, handler: SseHandler): () => void {
+  const isNewType = !handlers.has(type);
   if (!handlers.has(type)) {
     handlers.set(type, new Set());
   }
@@ -62,6 +78,10 @@ export function onSse(type: string, handler: SseHandler): () => void {
   // Connect on first handler
   if (handlers.size > 0 && !eventSource) {
     connect();
+  } else if (eventSource && isNewType) {
+    // Connection already open but this is a brand-new event type:
+    // named events require an explicit addEventListener per type.
+    eventSource.addEventListener(type, handleEvent);
   }
 
   // Return unsubscribe function

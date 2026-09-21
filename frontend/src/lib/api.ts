@@ -20,7 +20,7 @@ export interface Task {
   file_name: string;
   file_size: number | null;
   mime_type: string | null;
-  status: 'pending' | 'downloading' | 'done' | 'failed';
+  status: 'pending' | 'downloading' | 'done' | 'failed' | 'awaiting_confirmation';
   progress: number;
   target_path: string | null;
   error: string | null;
@@ -36,6 +36,19 @@ export interface TasksResponse {
 
 export interface BotStatus {
   running: boolean;
+}
+
+export interface Song {
+  file_name: string;
+  file_size: number;
+  ext: string;
+  modified_at: string;
+}
+
+export interface SongsResponse {
+  dir: string;
+  songs: Song[];
+  total: number;
 }
 
 export async function getConfig(): Promise<Config> {
@@ -75,4 +88,40 @@ export async function getLogs(): Promise<string[]> {
   if (!res.ok) throw new Error('Failed to fetch logs');
   const data = (await res.json()) as { logs: string[] };
   return data.logs;
+}
+
+export async function getSongs(search = ''): Promise<SongsResponse> {
+  const q = search ? `?search=${encodeURIComponent(search)}` : '';
+  const res = await fetch(`${API_BASE}/songs${q}`);
+  if (!res.ok) throw new Error('Failed to fetch songs');
+  return res.json();
+}
+
+export async function resolveDuplicateTask(
+  id: string,
+  action: 'download' | 'cancel',
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/tasks/${id}/resolve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action }),
+  });
+  if (!res.ok) throw new Error('Failed to resolve duplicate task');
+}
+
+export interface PendingDuplicate {
+  taskId: string;
+  fileName: string;
+  fileSize: number | null;
+  mimeType: string | null;
+  performer?: string;
+  title?: string;
+  match: { file_name: string; file_size: number; ext: string; score: number };
+}
+
+export async function getPendingDuplicates(): Promise<PendingDuplicate[]> {
+  const res = await fetch(`${API_BASE}/tasks/duplicates`);
+  if (!res.ok) throw new Error('Failed to fetch pending duplicates');
+  const data = (await res.json()) as { duplicates: PendingDuplicate[] };
+  return data.duplicates;
 }

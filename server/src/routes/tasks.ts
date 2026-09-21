@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { getDb } from "../db/index.js";
+import { resolveDuplicate, listPendingDuplicates } from "../bot-manager.js";
 
 const tasks = new Hono();
 
@@ -18,6 +19,25 @@ tasks.get("/", (c) => {
   const total = (db.query("SELECT COUNT(*) as count FROM tasks").get() as { count: number }).count;
 
   return c.json({ tasks: rows, total });
+});
+
+// GET /api/duplicates - list tasks awaiting a duplicate decision
+tasks.get("/duplicates", (c) => {
+  return c.json({ duplicates: listPendingDuplicates() });
+});
+
+// POST /api/tasks/:id/resolve - resolve a duplicate-pending task
+// Body: { action: "download" | "cancel" }
+tasks.post("/:id/resolve", async (c) => {
+  const id = c.req.param("id");
+  const body = (await c.req.json().catch(() => ({}))) as { action?: string };
+  const action = body.action === "cancel" ? "cancel" : "download";
+
+  const ok = resolveDuplicate(id, action);
+  if (!ok) {
+    return c.json({ ok: false, error: "task not found or not awaiting duplicate decision" }, 404);
+  }
+  return c.json({ ok: true, action });
 });
 
 // DELETE /api/tasks/:id - delete a task record

@@ -1,10 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
-import { getTasks, deleteTask, type Task } from '../lib/api';
+import { getTasks, deleteTask, resolveDuplicateTask, type Task } from '../lib/api';
 import { onSse, type SseMessage } from '../lib/sse';
-import { ListTodo, Download, CheckCircle, XCircle, Clock, Trash2, FileIcon, RefreshCw } from 'lucide-react';
+import {
+  ListTodo, Download, CheckCircle, XCircle, Clock, Trash2, FileIcon, RefreshCw,
+  AlertTriangle, Loader2,
+} from 'lucide-react';
 
 const STATUS_CONFIG = {
   pending: { label: '等待中', icon: Clock, color: 'text-yellow-400', bg: 'bg-yellow-500/10', border: 'border-yellow-500/20' },
+  awaiting_confirmation: { label: '待确认', icon: AlertTriangle, color: 'text-orange-400', bg: 'bg-orange-500/10', border: 'border-orange-500/30' },
   downloading: { label: '下载中', icon: Download, color: 'text-blue-400', bg: 'bg-blue-500/10', border: 'border-blue-500/20' },
   done: { label: '已完成', icon: CheckCircle, color: 'text-green-400', bg: 'bg-green-500/10', border: 'border-green-500/20' },
   failed: { label: '失败', icon: XCircle, color: 'text-red-400', bg: 'bg-red-500/10', border: 'border-red-500/20' },
@@ -38,6 +42,7 @@ export function TasksPage() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [resolving, setResolving] = useState<string | null>(null);
 
   const loadTasks = useCallback(async () => {
     try {
@@ -92,11 +97,20 @@ export function TasksPage() {
       );
     });
 
+    // Task was parked awaiting a duplicate decision, or resolved — replace it
+    const unsubUpdated = onSse('task_updated', (msg: SseMessage) => {
+      const task = msg.data.task as unknown as Task;
+      if (task && task.id) {
+        setTasks((prev) => prev.map((t) => (t.id === task.id ? { ...t, ...task } : t)));
+      }
+    });
+
     return () => {
       unsubCreated();
       unsubProgress();
       unsubDone();
       unsubFailed();
+      unsubUpdated();
     };
   }, []);
 
@@ -113,7 +127,35 @@ export function TasksPage() {
     }
   };
 
-  const activeCount = tasks.filter((t) => t.status === 'pending' || t.status === 'downloading').length;
+  const handleResolve = async (id: string, action: 'download' | 'cancel') => {
+    setResolving(id);
+    try {
+      await resolveDuplicateTask(id, action);
+      // Optimistically reflect the decision; SSE will confirm the final state.
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === id
+            ? {
+                ...t,
+                status: action === 'cancel' ? 'failed' : 'pending',
+                error: action === 'cancel' ? '用户取消：本地已存在同名歌曲' : null,
+              }
+            : t
+        )
+      );
+    } catch {
+      // ignore
+    } finally {
+      setResolving(null);
+    }
+  };
+
+  const activeCount = tasks.filter(
+    (t) =>
+      t.status === 'pending' ||
+      t.status === 'downloading' ||
+      t.status === 'awaiting_confirmation',
+  ).length;
 
   return (
     <div className="space-y-6">
@@ -200,6 +242,41 @@ export function TasksPage() {
                             className="h-full bg-blue-500 rounded-full transition-all duration-300 ease-out"
                             style={{ width: `${task.progress}%` }}
                           />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Awaiting duplicate confirmation: inline action buttons */}
+                    {task.status === 'awaiting_confirmation' && (
+                      <div className="mt-2 mb-1">
+                        <div className="text-xs text-orange-400/90 bg-orange-500/10 border border-orange-500/20 rounded px-2.5 py-1.5">
+                          本地已存在相似歌曲，请选择是否继续下载
+                        </div>
+                        <div className="flex items-center gap-2 mt-2">
+                          <button
+                            onClick={() => handleResolve(task.id, 'download')}
+                            disabled={resolving === task.id}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium
+                                       text-white bg-blue-600 hover:bg-blue-500 disabled:opacity-50
+                                       rounded-md transition-colors"
+                          >
+                            {resolving === task.id ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Download className="w-3.5 h-3.5" />
+                            )}
+                            仍然下载
+                          </button>
+                          <button
+                            onClick={() => handleResolve(task.id, 'cancel')}
+                            disabled={resolving === task.id}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium
+                                       text-gray-300 bg-gray-800 hover:bg-gray-700 disabled:opacity-50
+                                       rounded-md transition-colors"
+                          >
+                            <XCircle className="w-3.5 h-3.5" />
+                            取消下载
+                          </button>
                         </div>
                       </div>
                     )}

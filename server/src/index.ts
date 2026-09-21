@@ -6,6 +6,7 @@ import { config } from "./routes/config.js";
 import { tasks } from "./routes/tasks.js";
 import { events, broadcast } from "./routes/events.js";
 import { logs } from "./routes/logs.js";
+import { songs } from "./routes/songs.js";
 import { startBot, stopBot, isBotRunning } from "./bot-manager.js";
 import { getDb } from "./db/index.js";
 import "./logger.js"; // activate log interceptor
@@ -20,6 +21,7 @@ app.route("/api/config", config);
 app.route("/api/tasks", tasks);
 app.route("/api/events", events);
 app.route("/api/logs", logs);
+app.route("/api/songs", songs);
 
 // Bot status endpoint
 app.get("/api/status", (c) => {
@@ -40,6 +42,23 @@ for (const row of savedConfig) {
 const botToken = cfg.bot_token || cfg.botToken;
 const chatId = cfg.chat_id || cfg.chatId;
 const downloadDir = cfg.download_dir || cfg.downloadDir || "./data/downloads";
+
+// On startup, any task still marked 'pending' or 'awaiting_confirmation' from a
+// previous run is an orphan: its in-memory duplicate-decision state was lost
+// when the process restarted. Mark them failed so they don't sit forever with
+// no action buttons.
+const orphaned = getDb()
+  .query(
+    `UPDATE tasks
+        SET status = 'failed',
+            error = '服务重启，该任务的中断状态已丢失，请重新转发或手动重试',
+            updated_at = datetime('now')
+      WHERE status IN ('pending', 'awaiting_confirmation')`,
+  )
+  .run();
+if (orphaned.changes > 0) {
+  console.log(`[startup] marked ${orphaned.changes} orphaned pending task(s) as failed`);
+}
 
 if (botToken && chatId) {
   console.log("[startup] found saved config, starting bot...");

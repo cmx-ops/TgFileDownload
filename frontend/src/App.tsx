@@ -2,7 +2,9 @@ import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-do
 import { ConfigPage } from './pages/ConfigPage';
 import { MonitorPage } from './pages/MonitorPage';
 import { TasksPage } from './pages/TasksPage';
-import { Settings, Radio, ListTodo, Menu, X } from 'lucide-react';
+import { SongsPage } from './pages/SongsPage';
+import { DuplicateModal } from './components/DuplicateModal';
+import { Settings, Radio, ListTodo, Music, Menu, X } from 'lucide-react';
 import { useState } from 'react';
 
 function NavItem({ to, icon, label, onClick }: { to: string; icon: React.ReactNode; label: string; onClick?: () => void }) {
@@ -57,6 +59,7 @@ function App() {
           <nav className="flex-1 p-3 space-y-1">
             <NavItem to="/config" icon={<Settings className="w-5 h-5" />} label="配置" />
             <NavItem to="/monitor" icon={<Radio className="w-5 h-5" />} label="消息监控" />
+            <NavItem to="/songs" icon={<Music className="w-5 h-5" />} label="歌曲库" />
             <NavItem to="/tasks" icon={<ListTodo className="w-5 h-5" />} label="下载任务" />
           </nav>
           <div className="p-4 border-t border-gray-800">
@@ -93,6 +96,7 @@ function App() {
           <nav className="p-4 space-y-1">
             <NavItem to="/config" icon={<Settings className="w-5 h-5" />} label="配置" onClick={() => setMobileMenuOpen(false)} />
             <NavItem to="/monitor" icon={<Radio className="w-5 h-5" />} label="消息监控" onClick={() => setMobileMenuOpen(false)} />
+            <NavItem to="/songs" icon={<Music className="w-5 h-5" />} label="歌曲库" onClick={() => setMobileMenuOpen(false)} />
             <NavItem to="/tasks" icon={<ListTodo className="w-5 h-5" />} label="下载任务" onClick={() => setMobileMenuOpen(false)} />
           </nav>
         </aside>
@@ -104,6 +108,7 @@ function App() {
               <Route path="/" element={<Navigate to="/config" replace />} />
               <Route path="/config" element={<ConfigPage />} />
               <Route path="/monitor" element={<MonitorPage />} />
+              <Route path="/songs" element={<SongsPage />} />
               <Route path="/tasks" element={<TasksPage />} />
             </Routes>
           </div>
@@ -113,9 +118,13 @@ function App() {
         <nav className="md:hidden fixed bottom-0 left-0 right-0 z-20 flex items-center justify-around bg-gray-950 border-t border-gray-800">
           <MobileTab to="/config" icon={<Settings className="w-5 h-5" />} label="配置" />
           <MobileTab to="/monitor" icon={<Radio className="w-5 h-5" />} label="监控" />
+          <MobileTab to="/songs" icon={<Music className="w-5 h-5" />} label="歌曲" />
           <MobileTab to="/tasks" icon={<ListTodo className="w-5 h-5" />} label="任务" />
         </nav>
       </div>
+
+      {/* Global duplicate reminder modal */}
+      <DuplicateModal />
     </BrowserRouter>
   );
 }

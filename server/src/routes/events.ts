@@ -4,11 +4,23 @@ import { streamSSE } from "hono/streaming";
 // SSE event emitter - shared across modules
 export type SseEvent =
   | { type: "task_created"; task: Record<string, unknown> }
+  | { type: "task_updated"; task: Record<string, unknown> }
   | { type: "task_progress"; taskId: string; progress: number; status: string }
   | { type: "task_done"; task: Record<string, unknown> }
   | { type: "task_failed"; taskId: string; error: string }
   | { type: "bot_status"; running: boolean }
-  | { type: "message"; data: Record<string, unknown> };
+  | { type: "message"; data: Record<string, unknown> }
+  | {
+      type: "duplicate_found";
+      taskId: string;
+      fileName: string;
+      fileSize: number | null;
+      mimeType: string | null;
+      performer?: string;
+      title?: string;
+      match: { file_name: string; file_size: number; ext: string; score: number };
+    }
+  | { type: "duplicate_resolved"; taskId: string; action: "download" | "cancel" };
 
 // Store active SSE client streams
 const clients = new Set<{ send: (event: SseEvent) => void }>();

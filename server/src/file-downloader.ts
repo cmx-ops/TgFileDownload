@@ -111,6 +111,10 @@ export async function downloadFile(
 
 /**
  * Download via standard Bot API (getFile + fetch).
+ *
+ * Streams the response body to disk with proper backpressure (pipe to the
+ * Node writable stream instead of a manual read/write loop, which avoided
+ * buffering the whole chunk list in memory and let disk I/O pace the network).
  */
 async function downloadViaBotAPI(
   apiToken: string,
@@ -135,33 +139,38 @@ async function downloadViaBotAPI(
   const fileSize = file.fileSize ?? fileData.result.file_size ?? 0;
   const downloadUrl = `${TELEGRAM_FILE_BASE}${apiToken}/${filePath}`;
 
-  // Step 2: stream download
+  // Step 2: stream download with backpressure-aware piping
   const response = await fetch(downloadUrl);
   if (!response.ok) {
     throw new Error(`download failed: ${response.status} ${response.statusText}`);
   }
 
   const contentLength = Number(response.headers.get("content-length")) || fileSize;
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error("no response body stream");
+  if (!response.body) throw new Error("no response body stream");
 
+  const { Readable } = await import("node:stream");
+  const { pipeline } = await import("node:stream/promises");
   const fs = await import("node:fs");
-  const writer = fs.createWriteStream(destPath);
+
+  // High-water mark of 1MB: larger chunks read per disk write, fewer syscalls
+  const fileStream = fs.createWriteStream(destPath, { highWaterMark: 1024 * 1024 });
+  const nodeStream = Readable.fromWeb(response.body as import("node:stream/web").ReadableStream);
+
   let downloaded = 0;
   let lastProgress = 0;
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    writer.write(Buffer.from(value));
-    downloaded += value.length;
-
-    const pct = contentLength > 0 ? Math.min(Math.floor((downloaded / contentLength) * 100), 100) : 0;
+  nodeStream.on("data", (chunk: Buffer) => {
+    downloaded += chunk.length;
+    const pct =
+      contentLength > 0 ? Math.min(Math.floor((downloaded / contentLength) * 100), 100) : 0;
     if (pct > lastProgress) {
       lastProgress = pct;
       onProgress(downloaded, contentLength);
     }
-  }
+  });
 
-  writer.end();
+  await pipeline(nodeStream, fileStream);
+
+  // Final progress tick
+  if (contentLength > 0) onProgress(Math.min(downloaded, contentLength), contentLength);
 }

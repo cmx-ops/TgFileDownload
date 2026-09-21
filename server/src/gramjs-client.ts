@@ -16,9 +16,11 @@
 
 import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions";
+import { Api } from "telegram";
+import bigInt from "big-integer";
 import { getDb } from "./db/index.js";
 import { resolve } from "node:path";
-import { mkdirSync, writeFileSync, statSync } from "node:fs";
+import { mkdirSync, openSync, writeSync, closeSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 
 interface GramJsProxy {
@@ -98,7 +100,7 @@ export async function getOrCreateClient(
     throw err;
   }
 
-  const saved = newClient.session.save() as string;
+  const saved = String(newClient.session.save() ?? "");
   if (saved) {
     db.query(
       `INSERT INTO config (key, value) VALUES (?, ?)
@@ -125,12 +127,22 @@ export function readMtProtoCredentials(): { apiId: number; apiHash: string } | n
 }
 
 /**
- * Download a large file via MTProto using gramjs's idiomatic API.
+ * Download a large file via MTProto using gramjs's low-level downloadFile API.
+ *
+ * Why switch from `downloadMedia` to the low-level `iterDownload`?
+ *   - `downloadMedia` uses one sequential chunk fetch at a time (one RTT per
+ *     chunk, throttled by latency). On a high-latency connection this caps
+ *     bulk download speed well below the pipe bandwidth.
+ *   - GramJS's low-level `downloadFile`/`iterDownload` can be given a larger
+ *     `requestSize` and run several workers in parallel, so multiple chunks
+ *     are in flight at once — effectively raising throughput on slow/high-
+ *     latency links.
  *
  * Flow:
  *   tg.getEntity(chatId) -> resolves chat/channel with proper accessHash
  *   tg.getMessages(entity, { ids: [msgId] }) -> returns Message[]
- *   tg.downloadMedia(message) -> Buffer (no size limit)
+ *   extract document/photo location from the media
+ *   tg.downloadFile(loc, { outputFile, fileSize, workers, partSizeKb }) -> file
  */
 export async function downloadLargeFile(
   botToken: string,
@@ -158,21 +170,168 @@ export async function downloadLargeFile(
   }
 
   const msg = msgs[0];
-  console.log("[gramjs] got message, has media: " + !!msg.media);
 
-  const buffer: Buffer = await tg.downloadMedia(msg, {
-    progressCallback: (progress: number, total: number) => {
-      onProgress(progress, total);
-    },
-  } as never);
+  let location: Api.TypeInputFileLocation;
+  let fileSize: number;
+  let dcId: number | undefined;
+  const thumbSize = "";
 
-  if (!buffer || buffer.byteLength === 0) {
-    throw new Error("downloaded empty buffer");
+  const media = msg.media;
+
+  // ---- Extract download location + size from the media ----
+  // Normalize: pull the inner document/photo out of MessageMediaDocument/Photo
+  const innerMedia =
+    media instanceof Api.MessageMediaDocument
+      ? media.document
+      : media instanceof Api.MessageMediaPhoto
+        ? media.photo
+        : media;
+
+  const doc =
+    innerMedia instanceof Api.Document && !(innerMedia instanceof Api.DocumentEmpty)
+      ? innerMedia
+      : null;
+  const photo =
+    innerMedia instanceof Api.Photo && !(innerMedia instanceof Api.PhotoEmpty)
+      ? innerMedia
+      : null;
+
+  const bigintSize = (v: unknown): number => {
+    if (typeof v === "bigint") return Number(v);
+    if (typeof v === "number") return v;
+    if (v && typeof v === "object" && "toJSNumber" in (v as object)) {
+      return (v as { toJSNumber: () => number }).toJSNumber();
+    }
+    return 0;
+  };
+
+  if (doc) {
+    location = new Api.InputDocumentFileLocation({
+      id: doc.id,
+      accessHash: doc.accessHash,
+      fileReference: doc.fileReference,
+      thumbSize,
+    });
+    fileSize = bigintSize(doc.size);
+    dcId = doc.dcId;
+  } else if (photo) {
+    const sizes = photo.sizes;
+    if (!sizes || sizes.length === 0) {
+      throw new Error("photo has no sizes");
+    }
+    // pick the largest photo size (last one is usually the biggest)
+    const last = sizes[sizes.length - 1] as Api.PhotoSize;
+    location = new Api.InputPhotoFileLocation({
+      id: photo.id,
+      accessHash: photo.accessHash,
+      fileReference: photo.fileReference,
+      thumbSize: last.type ?? "",
+    });
+    fileSize = bigintSize(last.size);
+    dcId = photo.dcId;
+  } else {
+    throw new Error("unsupported media type for download: " + media?.className);
   }
 
-  writeFileSync(absPath, buffer);
+  // Parallelism: more workers = more concurrent chunk fetches.
+  // 4 for normal files; scale up a bit for very large ones, cap at 8 to be
+  // nice to Telegram's rate limits.
+  const WORKERS = Math.min(8, Math.max(4, Math.ceil(fileSize / (256 * 1024 * 1024))));
+
+  console.log(
+    "[tg] downloading %d bytes (dc=%s) with %d parallel worker(s)...",
+    fileSize,
+    dcId ?? "auto",
+    WORKERS,
+  );
+
+  // ---- Parallel segmented download ----
+  // GramJS's high-level downloadFile()/iterDownload() fetch chunks
+  // *sequentially* (one upload.getFile at a time). On high-latency or proxied
+  // links that single round-trip-per-chunk caps throughput well below the
+  // actual pipe bandwidth.
+  //
+  // Here we split the file into several disjoint byte ranges and fetch each
+  // range in its own worker using the low-level upload.getFile request, then
+  // write each chunk straight to the correct file offset. Multiple chunks are
+  // in flight simultaneously, so throughput scales with parallelism.
+  const PARTS = 512 * 1024; // 512KB per request (max gramjs uses)
+  await parallelSegmentedDownload(tg, location, dcId, fileSize, PARTS, WORKERS, absPath, onProgress);
+
   const stats = statSync(absPath);
-  console.log("[gramjs] download complete: " + absPath + " (" + stats.size + " bytes)");
+  console.log("[tg] download complete: " + absPath + " (" + stats.size + " bytes)");
+}
+
+/**
+ * Download a file by splitting it into N disjoint byte ranges, fetching each
+ * range concurrently with the low-level `upload.getFile` request, and writing
+ * every chunk directly to the correct offset of the destination file.
+ */
+async function parallelSegmentedDownload(
+  client: TelegramClient,
+  location: Api.TypeInputFileLocation,
+  dcId: number | undefined,
+  fileSize: number,
+  partSize: number,
+  workers: number,
+  destPath: string,
+  onProgress: (downloaded: number, total: number) => void,
+): Promise<void> {
+  const totalParts = Math.max(1, Math.ceil(fileSize / partSize));
+  const fd = openSync(destPath, "w");
+  let completedBytes = 0;
+  let lastReported = -1;
+  let partIdx = 0;
+  let actualDc = dcId;
+
+  const requestError = new Error(
+    `download failed: target file was not fully written (expected ${fileSize} bytes)`,
+  );
+
+  try {
+    // Each worker pulls the next available part until the queue is drained.
+    async function worker(): Promise<void> {
+      while (true) {
+        const idx = partIdx++;
+        if (idx >= totalParts) return;
+        const offset = idx * partSize;
+
+        // Telegram `upload.getFile` returns at most `limit` bytes starting at
+        // `offset`. The offset is a `long`; use the library's BigInteger type.
+        const request = new Api.upload.GetFile({
+          location,
+          offset: bigInt(offset),
+          limit: partSize,
+        });
+        const result = await client.invoke(request, actualDc);
+
+        if (!(result instanceof Api.upload.File) || !result.bytes) {
+          throw requestError;
+        }
+
+        const chunk = result.bytes as Buffer;
+        // The last request may return fewer bytes than requested; that's fine.
+        writeSync(fd, chunk, 0, chunk.length, offset);
+
+        completedBytes += chunk.length;
+        const pct = fileSize > 0 ? Math.floor((completedBytes / fileSize) * 100) : 100;
+        if (pct > lastReported) {
+          lastReported = pct;
+          onProgress(completedBytes, fileSize);
+        }
+      }
+    }
+
+    await Promise.all(Array.from({ length: workers }, () => worker()));
+  } finally {
+    closeSync(fd);
+  }
+
+  // Verify we wrote the full file (the last part is often short, so compare
+  // against the number of parts we intended to write).
+  if (completedBytes < fileSize) {
+    throw requestError;
+  }
 }
 
 export function isSmallFile(fileSize: number | undefined | null): boolean {

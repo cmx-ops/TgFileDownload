@@ -8,6 +8,34 @@ import crypto from "node:crypto";
 let currentBot: Bot | null = null;
 let currentConfig: { botToken: string; chatId: string; downloadDir: string } | null = null;
 
+// ---- Download concurrency pool ----
+// Multiple files can be downloaded in parallel. A slow file no longer blocks
+// the rest of the queue. Adjust the number of workers to balance throughput
+// vs. resource usage (each worker holds an MTProto/HTTP connection).
+const MAX_CONCURRENT_DOWNLOADS = 3;
+let activeDownloads = 0;
+const downloadQueue: Array<() => void> = [];
+
+function acquireSlot(): Promise<void> {
+  return new Promise((resolve) => {
+    if (activeDownloads < MAX_CONCURRENT_DOWNLOADS) {
+      activeDownloads++;
+      resolve();
+    } else {
+      downloadQueue.push(resolve);
+    }
+  });
+}
+
+function releaseSlot(): void {
+  const next = downloadQueue.shift();
+  if (next) {
+    next(); // hand the slot to the next waiting task (activeDownloads stays the same)
+  } else {
+    activeDownloads--;
+  }
+}
+
 export function isBotRunning(): boolean {
   return currentBot?.isRunning() ?? false;
 }
@@ -191,10 +219,18 @@ export async function startBot(config: {
 
       broadcast({ type: "task_created", task });
 
-      // Download the file in background
-      downloadFile(config.botToken, taskId, file, config.downloadDir).catch((err) => {
-        console.error(`[download] task ${taskId} failed:`, err);
-      });
+      // Download the file in background, with a concurrency pool so multiple
+      // files download at the same time instead of one-by-one.
+      const run = async () => {
+        try {
+          await downloadFile(config.botToken, taskId, file, config.downloadDir);
+        } catch (err) {
+          console.error(`[download] task ${taskId} failed:`, err);
+        } finally {
+          releaseSlot();
+        }
+      };
+      acquireSlot().then(run);
     }
   });
 

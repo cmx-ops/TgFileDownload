@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { getConfig, saveConfig, getStatus, getLogs } from '../lib/api';
 import { onSse, type SseMessage } from '../lib/sse';
-import { Save, Activity, Power, PowerOff, ArrowRight, Bot } from 'lucide-react';
+import { Save, Activity, Power, PowerOff, ArrowRight, Bot, Eye, EyeOff } from 'lucide-react';
 
 export function ConfigPage() {
   const [botToken, setBotToken] = useState('');
@@ -10,6 +10,8 @@ export function ConfigPage() {
   const [proxyUrl, setProxyUrl] = useState('');
   const [chatId, setChatId] = useState('');
   const [downloadDir, setDownloadDir] = useState('./data/downloads');
+  const [showBotToken, setShowBotToken] = useState(false);
+  const [showApiHash, setShowApiHash] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -111,15 +113,25 @@ export function ConfigPage() {
             <Bot className="w-4 h-4 text-blue-400" />
             Bot Token
           </label>
-          <input
-            type="password"
-            value={botToken}
-            onChange={(e) => setBotToken(e.target.value)}
-            placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
-            className="w-full px-4 py-2.5 bg-gray-900 border border-gray-800 rounded-lg text-sm
-                       text-gray-100 placeholder-gray-600 focus:outline-none focus:ring-2
-                       focus:ring-blue-500/40 focus:border-blue-500/40 transition-all"
-          />
+          <div className="relative">
+            <input
+              type={showBotToken ? "text" : "password"}
+              value={botToken}
+              onChange={(e) => setBotToken(e.target.value)}
+              placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+              className="w-full px-4 py-2.5 pr-10 bg-gray-900 border border-gray-800 rounded-lg text-sm
+                         text-gray-100 placeholder-gray-600 focus:outline-none focus:ring-2
+                         focus:ring-blue-500/40 focus:border-blue-500/40 transition-all"
+            />
+            <button
+              type="button"
+              onClick={() => setShowBotToken(!showBotToken)}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition-colors"
+              tabIndex={-1}
+            >
+              {showBotToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            </button>
+          </div>
         </div>
 
         <div className="space-y-2">
@@ -150,15 +162,25 @@ export function ConfigPage() {
             </svg>
             api_hash（可选）
           </label>
-          <input
-            type="password"
-            value={apiHash}
-            onChange={(e) => setApiHash(e.target.value)}
-            placeholder="a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6"
-            className="w-full px-4 py-2.5 bg-gray-900 border border-gray-800 rounded-lg text-sm
-                       text-gray-100 placeholder-gray-600 focus:outline-none focus:ring-2
-                       focus:ring-blue-500/40 focus:border-blue-500/40 transition-all"
-          />
+          <div className="relative">
+            <input
+              type={showApiHash ? "text" : "password"}
+              value={apiHash}
+              onChange={(e) => setApiHash(e.target.value)}
+              placeholder="a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6"
+              className="w-full px-4 py-2.5 pr-10 bg-gray-900 border border-gray-800 rounded-lg text-sm
+                         text-gray-100 placeholder-gray-600 focus:outline-none focus:ring-2
+                         focus:ring-blue-500/40 focus:border-blue-500/40 transition-all"
+            />
+            <button
+              type="button"
+              onClick={() => setShowApiHash(!showApiHash)}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition-colors"
+              tabIndex={-1}
+            >
+              {showApiHash ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            </button>
+          </div>
           <p className="text-xs text-gray-600 mt-1">
             对应 api_id 的密钥，32 位字母数字组合。不配置时超过 20MB 的文件将跳过
           </p>
